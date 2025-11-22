@@ -3,6 +3,21 @@ local dutyStart = 0
 local lastSessionSeconds = 0
 local staffRank = "[Staff Rank]"
 
+-- Constants for configuration
+local DEFAULT_UI = {
+    x = 0.5,
+    y = 0.5,
+    width = 0.2,
+    height = 0.1,
+    font = 4,
+    scale = { timer = 0.35, rank = 0.30 },
+    colors = {
+        timer = { 255, 255, 255, 255 },
+        rank = { 200, 200, 255, 255 }
+    }
+}
+local UI = Config and Config.UI or DEFAULT_UI
+
 -- Helper function to format seconds into HH:MM:SS
 local function FormatTime(sec)
     local h = math.floor(sec / 3600)
@@ -11,35 +26,29 @@ local function FormatTime(sec)
     return string.format("%02d:%02d:%02d", h, m, s)
 end
 
--- Function to draw duty status UI
-local function DrawDutyUI(timerText, rankText)
-    DrawRect(Config.UI.x, Config.UI.y, Config.UI.width, Config.UI.height, 0, 0, 0, 150)
-
-    -- Timer text
-    SetTextFont(4)
+-- Function to draw generic text
+local function DrawTextUI(text, x, y, scale, color, center)
+    SetTextFont(UI.font)
     SetTextProportional(1)
-    SetTextScale(0.35, 0.35)
-    SetTextColour(255, 255, 255, 255)
-    SetTextCentre(false)
+    SetTextScale(scale, scale)
+    SetTextColour(table.unpack(color))
+    SetTextCentre(center or false)
     BeginTextCommandDisplayText("STRING")
-    AddTextComponentString(timerText)
-    EndTextCommandDisplayText(Config.UI.x - 0.06, Config.UI.y - 0.015)
-
-    -- Rank text
-    SetTextFont(4)
-    SetTextProportional(1)
-    SetTextScale(0.30, 0.30)
-    SetTextColour(200, 200, 255, 255)
-    SetTextCentre(false)
-    BeginTextCommandDisplayText("STRING")
-    AddTextComponentString("Rank: " .. rankText)
-    EndTextCommandDisplayText(Config.UI.x - 0.06, Config.UI.y + 0.012)
+    AddTextComponentString(text)
+    EndTextCommandDisplayText(x, y)
 end
 
--- Main thread to handle duty display
+-- Function to draw duty status UI
+local function DrawDutyUI(timerText, rankText)
+    DrawRect(UI.x, UI.y, UI.width, UI.height, 0, 0, 0, 150)
+    DrawTextUI(timerText, UI.x - 0.06, UI.y - 0.015, UI.scale.timer, UI.colors.timer, false)
+    DrawTextUI("Rank: " .. rankText, UI.x - 0.06, UI.y + 0.012, UI.scale.rank, UI.colors.rank, false)
+end
+
+-- Thread to draw UI while on duty
 Citizen.CreateThread(function()
     while true do
-        Citizen.Wait(0)
+        Citizen.Wait(onDuty and 0 or 1000) -- Reduce CPU usage while off duty
         if onDuty then
             local elapsed = os.time() - dutyStart
             DrawDutyUI("STAFF DUTY: " .. FormatTime(elapsed), staffRank)
@@ -47,50 +56,49 @@ Citizen.CreateThread(function()
     end
 end)
 
--- Event to set staff rank
-RegisterNetEvent("staff:setRank")
-AddEventHandler("staff:setRank", function(rank)
-    if type(rank) == "string" then
-        staffRank = rank
-    else
-        print("^1ERROR: Invalid rank received.")
-    end
+-- Server-side validation callback
+local function ValidateCommand(command)
+    TriggerServerEvent("staff:validateRole", command) -- Ask the server for validation
+end
+
+-- Callback to notify about invalid role
+RegisterNetEvent("staff:notifyInvalidRole")
+AddEventHandler("staff:notifyInvalidRole", function()
+    TriggerEvent("chat:addMessage", { args = {"^1ERROR:", "You do not have permission to use this command!"} })
 end)
 
--- Command to go on staff duty
-RegisterCommand("ondutystaff", function()
+-- Events to toggle on/off duty
+RegisterNetEvent("staff:goOnDuty")
+AddEventHandler("staff:goOnDuty", function()
     if onDuty then
         TriggerEvent("chat:addMessage", { args = {"^1STAFF:", "You are already on duty!"} })
         return
     end
-    TriggerServerEvent("staff:onDuty")
     onDuty = true
     dutyStart = os.time()
     TriggerEvent("chat:addMessage", { args = {"^2STAFF:", "You are now on duty!"} })
 end)
 
--- Command to go off staff duty
-RegisterCommand("offdutystaff", function()
+RegisterNetEvent("staff:goOffDuty")
+AddEventHandler("staff:goOffDuty", function()
     if not onDuty then
         TriggerEvent("chat:addMessage", { args = {"^1STAFF:", "You are not on duty!"} })
         return
     end
     onDuty = false
-    lastSessionSeconds = os.time() - dutyStart
-    TriggerServerEvent("staff:offDuty", lastSessionSeconds)
     TriggerEvent("chat:addMessage", { args = {"^2STAFF:", "You are now off duty!"} })
 end)
 
--- Command to display staff time
+-- Commands
+RegisterCommand("ondutystaff", function() ValidateCommand("onDuty") end)
+RegisterCommand("offdutystaff", function() ValidateCommand("offDuty") end)
 RegisterCommand("stafftime", function()
     if onDuty then
         local elapsed = os.time() - dutyStart
         TriggerEvent("chat:addMessage", { args = {"^3STAFF TIME:", "Current duty time: " .. FormatTime(elapsed) .. " | Rank: " .. staffRank} })
+    elseif lastSessionSeconds > 0 then
+        TriggerEvent("chat:addMessage", { args = {"^3STAFF TIME:", "Last duty session: " .. FormatTime(lastSessionSeconds) .. " | Rank: " .. staffRank} })
     else
-        if lastSessionSeconds > 0 then
-            TriggerEvent("chat:addMessage", { args = {"^3STAFF TIME:", "Last duty session: " .. FormatTime(lastSessionSeconds) .. " | Rank: " .. staffRank} })
-        else
-            TriggerEvent("chat:addMessage", { args = {"^3STAFF TIME:", "You are not on duty yet."} })
-        end
+        TriggerEvent("chat:addMessage", { args = {"^3STAFF TIME:", "You are not on duty yet."} })
     end
 end)
